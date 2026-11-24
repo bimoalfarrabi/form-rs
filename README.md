@@ -59,8 +59,18 @@ sudo apt install libxkbcommon-dev libwayland-dev libx11-xcb-dev \
    preview.
 5. **Save PNG** for a still, **Loop · 6s** for a 180-frame seamless WebM.
 
-Loop export pipes raw frames to `ffmpeg` and needs a build with
-`libvpx-vp9`. The button stays disabled with a hint when ffmpeg is missing.
+Loop export pipes raw frames to `ffmpeg` with `libvpx-vp9`. Form looks for it,
+in order:
+
+1. the path you picked last time (stored in the settings file),
+2. `FORM_FFMPEG`,
+3. `ffmpeg` / `ffmpeg.exe` next to the app, in `ffmpeg/`, or in
+   `Contents/Resources` inside the macOS bundle (drop a build there to make a
+   self-contained copy),
+4. `ffmpeg` on `PATH`.
+
+If none is found, clicking **Loop · 6s** opens a file picker so you can point at
+an `ffmpeg` binary once; the choice is remembered.
 
 Defaults: heatmap, Motion 1.50, Size 0.65, Inner glow 0.41, Outer glow 0.49,
 Contour 0.46, Direction 306°.

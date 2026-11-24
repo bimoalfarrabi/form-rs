@@ -10,10 +10,11 @@ use eframe::egui;
 use eframe::wgpu;
 use form_render::color::Rgba;
 use form_render::params::{self, Field, FrameRequest, Material, Params, Quality, Ratio};
-use form_render::video::{self, LoopJob};
+use form_render::video::{self, Ffmpeg, LoopJob};
 use form_render::{Frame, MapTexture, Renderer};
 
 use crate::logo::{self, Raster};
+use crate::settings;
 
 const BG: egui::Color32 = egui::Color32::from_rgb(0x14, 0x14, 0x14);
 const SURFACE: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x1c, 0x1c);
@@ -55,7 +56,7 @@ pub struct FormApp {
     frames_drawn: u32,
     export_rx: Option<Receiver<ExportMessage>>,
     exporting: bool,
-    ffmpeg: Option<String>,
+    ffmpeg: Option<Ffmpeg>,
 }
 
 enum ExportMessage {
@@ -111,7 +112,7 @@ impl FormApp {
             frames_drawn: 0,
             export_rx: None,
             exporting: false,
-            ffmpeg: video::ffmpeg_status(),
+            ffmpeg: resolve_ffmpeg(),
         };
 
         app.load_default_logo();
@@ -154,7 +155,7 @@ impl FormApp {
             frames_drawn: 0,
             export_rx: None,
             exporting: false,
-            ffmpeg: video::ffmpeg_status(),
+            ffmpeg: resolve_ffmpeg(),
         }
         .tap_default_logo()
     }
@@ -366,10 +367,13 @@ impl FormApp {
         if self.exporting {
             return;
         }
-        let Some(codec) = self.ffmpeg.clone() else {
-            self.status = "Video export needs ffmpeg with libvpx-vp9 on your PATH.".to_string();
+        if self.ffmpeg.is_none() && !self.locate_ffmpeg() {
+            return;
+        }
+        let Some(ffmpeg) = self.ffmpeg.clone() else {
             return;
         };
+        let codec = ffmpeg.codec.clone();
         self.ensure_map();
         let Some(map) = self.maps[self.material as usize].as_ref() else {
             self.status = "Nothing to export yet.".to_string();
@@ -413,7 +417,7 @@ impl FormApp {
                 let _ = progress_tx.send(ExportMessage::Progress(p));
                 ui.request_repaint();
             };
-            let result = video::encode_loop(&job, &mut report);
+            let result = video::encode_loop(&job, &ffmpeg, &mut report);
             let _ = tx.send(ExportMessage::Done(
                 result.map(|()| path).map_err(|e| e.to_string()),
             ));
@@ -423,6 +427,32 @@ impl FormApp {
         self.export_rx = Some(rx);
         self.exporting = true;
         self.status = format!("Rendering loop · 0% ({codec})");
+    }
+
+    /// Ask for an ffmpeg binary and remember it. Returns true when one is usable.
+    fn locate_ffmpeg(&mut self) -> bool {
+        let picked = rfd::FileDialog::new()
+            .set_title("Locate ffmpeg")
+            .pick_file();
+        let Some(path) = picked else {
+            self.status =
+                "Video export needs ffmpeg. Install it, drop ffmpeg next to Form, or pick it here."
+                    .to_string();
+            return false;
+        };
+        match Ffmpeg::probe(&path) {
+            Some(ffmpeg) => {
+                settings::set_ffmpeg_path(Some(&path));
+                self.status = format!("Using {}", ffmpeg.path.display());
+                self.ffmpeg = Some(ffmpeg);
+                true
+            }
+            None => {
+                self.status =
+                    "That file is not ffmpeg with a VP9 encoder (libvpx-vp9).".to_string();
+                false
+            }
+        }
     }
 
     /// Drain progress from the export thread.
@@ -959,27 +989,39 @@ impl FormApp {
             if ui.add(png).clicked() {
                 *action = Some(Action::ExportPng);
             }
-            let ready = self.ffmpeg.is_some() && !self.exporting;
+            let enabled = !self.exporting;
             let label = if self.exporting {
                 "Rendering..."
             } else {
                 "Loop - 6s"
             };
-            let video = egui::Button::new(egui::RichText::new(label).size(12.0).color(if ready {
-                INK
-            } else {
-                MUTED
-            }))
-            .fill(SURFACE)
-            .stroke(egui::Stroke::new(1.0, LINE))
-            .corner_radius(egui::CornerRadius::same(9))
-            .min_size(egui::vec2(width, 38.0));
-            let response = ui.add_enabled(ready, video);
+            let video =
+                egui::Button::new(egui::RichText::new(label).size(12.0).color(if enabled {
+                    INK
+                } else {
+                    MUTED
+                }))
+                .fill(SURFACE)
+                .stroke(egui::Stroke::new(1.0, LINE))
+                .corner_radius(egui::CornerRadius::same(9))
+                .min_size(egui::vec2(width, 38.0));
+            let response = ui.add_enabled(enabled, video);
             if response.clicked() {
                 *action = Some(Action::ExportLoop);
             }
-            if self.ffmpeg.is_none() {
-                response.on_disabled_hover_text("Needs ffmpeg with libvpx-vp9 on your PATH");
+            match &self.ffmpeg {
+                Some(ffmpeg) => {
+                    response.on_hover_text(format!(
+                        "180 frames at 30 fps via {} ({})",
+                        ffmpeg.path.display(),
+                        ffmpeg.codec
+                    ));
+                }
+                None => {
+                    response.on_hover_text(
+                        "ffmpeg not found - clicking lets you locate it (it is remembered)",
+                    );
+                }
             }
         });
     }
@@ -1293,4 +1335,11 @@ fn paint_transport(ui: &egui::Ui, rect: egui::Rect, paused: bool) {
             egui::Stroke::NONE,
         ));
     }
+}
+
+/// Prefer the ffmpeg the user picked before; otherwise discover one.
+fn resolve_ffmpeg() -> Option<Ffmpeg> {
+    settings::ffmpeg_path()
+        .and_then(|p| Ffmpeg::probe(&p))
+        .or_else(video::discover)
 }

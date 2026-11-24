@@ -45,9 +45,13 @@ fn main() -> anyhow::Result<()> {
         path: out.clone(),
     };
 
+    let ffmpeg =
+        video::discover().ok_or_else(|| anyhow::anyhow!("ffmpeg with libvpx-vp9 not found"))?;
+    eprintln!("using {} ({})", ffmpeg.path.display(), ffmpeg.codec);
+
     let mut last = 101;
     let started = std::time::Instant::now();
-    video::encode_loop(&job, &mut |p| {
+    video::encode_loop(&job, &ffmpeg, &mut |p| {
         if p / 10 != last / 10 {
             last = p;
             eprintln!("  {p}%");

@@ -60,30 +60,80 @@ impl LoopJob {
     }
 }
 
-/// Is an `ffmpeg` with a VP9 encoder on this machine?
-pub fn ffmpeg_status() -> Option<String> {
-    let out = Command::new("ffmpeg")
-        .args(["-hide_banner", "-encoders"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    if text.contains("libvpx-vp9") {
-        Some("libvpx-vp9".to_string())
-    } else if text.contains("libvpx ") {
-        Some("libvpx".to_string())
-    } else {
-        None
+/// A usable ffmpeg: where it is and which VP9 encoder it offers.
+#[derive(Clone, Debug)]
+pub struct Ffmpeg {
+    pub path: PathBuf,
+    pub codec: String,
+}
+
+impl Ffmpeg {
+    /// Probe one binary. `None` when it cannot run or has no VP9 encoder.
+    pub fn probe(path: &Path) -> Option<Self> {
+        let out = Command::new(path)
+            .args(["-hide_banner", "-encoders"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let codec = if text.contains("libvpx-vp9") {
+            "libvpx-vp9"
+        } else if text.contains("libvpx ") {
+            "libvpx"
+        } else {
+            return None;
+        };
+        Some(Self {
+            path: path.to_path_buf(),
+            codec: codec.to_string(),
+        })
     }
 }
 
-/// Render the loop and write `job.path`. `progress` receives 0..=100.
-pub fn encode_loop(job: &LoopJob, progress: &mut dyn FnMut(u32)) -> Result<()> {
-    let Some(codec) = ffmpeg_status() else {
-        bail!("ffmpeg with libvpx-vp9 was not found on PATH");
+/// Where an ffmpeg bundled next to the app would live.
+fn sidecar_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let name = if cfg!(windows) {
+                "ffmpeg.exe"
+            } else {
+                "ffmpeg"
+            };
+            out.push(dir.join(name));
+            out.push(dir.join("ffmpeg").join(name));
+            // macOS .app: Contents/MacOS/form -> Contents/Resources/ffmpeg
+            out.push(dir.join("../Resources").join(name));
+        }
+    }
+    out
+}
+
+/// Find ffmpeg: `FORM_FFMPEG`, then a sidecar next to the app, then `PATH`.
+pub fn discover() -> Option<Ffmpeg> {
+    if let Some(path) = std::env::var_os("FORM_FFMPEG") {
+        if let Some(found) = Ffmpeg::probe(Path::new(&path)) {
+            return Some(found);
+        }
+    }
+    for candidate in sidecar_candidates() {
+        if let Some(found) = Ffmpeg::probe(&candidate) {
+            return Some(found);
+        }
+    }
+    let name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
     };
+    Ffmpeg::probe(Path::new(name))
+}
+
+/// Render the loop and write `job.path`. `progress` receives 0..=100.
+pub fn encode_loop(job: &LoopJob, ffmpeg: &Ffmpeg, progress: &mut dyn FnMut(u32)) -> Result<()> {
+    let codec = ffmpeg.codec.clone();
 
     // yuv420 needs even dimensions.
     let width = job.width & !1;
@@ -100,7 +150,7 @@ pub fn encode_loop(job: &LoopJob, progress: &mut dyn FnMut(u32)) -> Result<()> {
         "yuv420p"
     };
 
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = Command::new(&ffmpeg.path);
     cmd.args([
         "-y",
         "-hide_banner",
