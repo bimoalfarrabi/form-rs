@@ -318,3 +318,45 @@ pub fn ensure_webm_extension(path: &Path) -> PathBuf {
         path.with_extension("webm")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fake ffmpeg that answers `-encoders` with (or without) libvpx-vp9.
+    #[cfg(unix)]
+    fn fake_ffmpeg(dir: &Path, name: &str, vp9: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        let body = if vp9 {
+            "#!/bin/sh\nif [ \"$1\" = \"-hide_banner\" ]; then\n  echo ' V....D libvpx-vp9  libvpx VP9 (codec vp9)'\n  exit 0\nfi\nexit 1\n"
+        } else {
+            "#!/bin/sh\necho ' V....D mpeg4  MPEG-4'\nexit 0\n"
+        };
+        std::fs::write(&path, body).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_requires_a_vp9_encoder() {
+        let dir = std::env::temp_dir().join("form-probe-test");
+        let good = fake_ffmpeg(&dir, "ffmpeg-vp9", true);
+        let bad = fake_ffmpeg(&dir, "ffmpeg-plain", false);
+        assert!(Ffmpeg::probe(&good).is_some());
+        assert!(Ffmpeg::probe(&bad).is_none());
+        assert!(Ffmpeg::probe(&dir.join("missing")).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_reports_the_codec_name() {
+        let dir = std::env::temp_dir().join("form-probe-test");
+        let good = fake_ffmpeg(&dir, "ffmpeg-vp9-name", true);
+        assert_eq!(Ffmpeg::probe(&good).unwrap().codec, "libvpx-vp9");
+    }
+}
