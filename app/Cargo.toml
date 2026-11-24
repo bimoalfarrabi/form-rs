@@ -42,25 +42,28 @@ tokio = { version = "1", features = ["rt"] }
 
 [package.metadata.packager]
 productName = "Form"
-version = "0.1.0"
 identifier = "dev.bimoalfarrabi.form"
 description = "Turn logos into animated liquid metal, heatmap or frosted glass."
 longDescription = "Form renders a logo as animated liquid metal, a heatmap or frosted glass and exports a still PNG or a seamless six-second loop. Everything runs locally."
 authors = ["Bimo Al-Farrabi"]
-licenseFile = "../LICENSE-MIT"
 homepage = "https://github.com/bimoalfarrabi/form-rs"
 category = "GraphicsAndDesign"
 outDir = "../target/dist"
+binariesDir = "../target/dist"
+resources = ["../LICENSE-MIT", "../LICENSE-APACHE", "../NOTICE"]
 beforePackagingCommand = "cargo build --profile dist -p form-app --bin form"
 icons = ["../packaging/icons/icon.png", "../packaging/icons/icon.ico", "../packaging/icons/icon.icns"]
 
 [[package.metadata.packager.binaries]]
-path = "../dist/form"
+path = "form"
 main = true
 
 [package.metadata.packager.deb]
-depends = ["libc6", "libxkbcommon0", "libwayland-client0", "libx11-6", "libegl1", "libvulkan1"]
+depends = ["libc6", "libxkbcommon0", "libxkbcommon-x11-0", "libwayland-client0", "libx11-6", "libx11-xcb1", "libxcursor1", "libxi6", "libegl1", "libvulkan1"]
 section = "graphics"
+
+[package.metadata.packager.macos]
+minimumSystemVersion = "11.0"
 
 [package.metadata.packager.nsis]
 installMode = "currentUser"

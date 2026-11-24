@@ -25,8 +25,13 @@ Download the package for your platform from
 | macOS | `.dmg` (Apple silicon and Intel, unsigned) |
 | Linux | `.deb`, `.AppImage`, portable `.tar.gz` |
 
-The macOS builds are not notarised. On first launch, right-click the app and
-choose **Open**, or run `xattr -dr com.apple.quarantine /Applications/Form.app`.
+The macOS builds are not notarised or signed. On first launch macOS may say the
+app is damaged or cannot be opened. Either allow it under **System Settings →
+Privacy & Security → Open Anyway**, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Form.app
+```
 
 ## Build from source
 

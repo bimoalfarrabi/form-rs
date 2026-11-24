@@ -14,6 +14,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  PACKAGER_VERSION: 0.11.8
 
 jobs:
   package:
@@ -47,12 +48,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libxkbcommon-dev libwayland-dev libx11-xcb-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libxcursor-dev libxi-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libegl1-mesa-dev libvulkan-dev wget file
 
+      - name: Enable VBScript for the WiX toolset
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          DISM /Online /Add-Capability /CapabilityName:VBSCRIPT~~~~ /NoRestart
+
       - name: Install cargo-packager
-        run: cargo install cargo-packager --locked
+        run: cargo install cargo-packager --locked --version ${{ env.PACKAGER_VERSION }}
 
       - name: Package
         working-directory: app
@@ -64,10 +73,11 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+
           case "${{ runner.os }}" in
             Linux)
-              cp target/dist/*.deb artifacts/ 2>/dev/null || true
-              cp target/dist/*.AppImage artifacts/ 2>/dev/null || true
+              cp target/dist/*.deb artifacts/
+              cp target/dist/*.AppImage artifacts/
               STAGE="form-${VERSION}-linux-x86_64"
               mkdir -p "$STAGE"
               cp target/dist/form "$STAGE/"
@@ -75,8 +85,8 @@ jobs:
               tar -czf "artifacts/${STAGE}.tar.gz" "$STAGE"
               ;;
             Windows)
-              cp target/dist/*.exe artifacts/ 2>/dev/null || true
-              cp target/dist/*.msi artifacts/ 2>/dev/null || true
+              cp target/dist/*-setup.exe artifacts/
+              cp target/dist/*.msi artifacts/
               STAGE="form-${VERSION}-windows-x86_64"
               mkdir -p "$STAGE"
               cp target/dist/form.exe "$STAGE/"
@@ -84,7 +94,7 @@ jobs:
               powershell -Command "Compress-Archive -Path '$STAGE' -DestinationPath 'artifacts/${STAGE}.zip'"
               ;;
             macOS)
-              cp target/dist/*.dmg artifacts/ 2>/dev/null || true
+              cp target/dist/*.dmg artifacts/
               ;;
           esac
           ls -la artifacts
@@ -99,8 +109,19 @@ jobs:
   release:
     name: publish
     needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the crate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          test "v${VERSION}" = "${GITHUB_REF_NAME}" \
+            || { echo "tag ${GITHUB_REF_NAME} does not match v${VERSION}"; exit 1; }
+
       - uses: actions/download-artifact@v4
         with:
           path: release
@@ -113,4 +134,5 @@ jobs:
         with:
           files: release/*
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
+          draft: false
