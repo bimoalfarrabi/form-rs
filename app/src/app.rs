@@ -516,7 +516,7 @@ pub fn install_fonts(ctx: &egui::Context) {
         style.visuals.widgets.hovered.bg_fill = PANEL;
         style.visuals.widgets.active.bg_fill = PANEL;
         style.visuals.override_text_color = Some(INK);
-        style.spacing.slider_width = 150.0;
+        style.spacing.slider_width = 124.0;
     });
 }
 
@@ -668,9 +668,11 @@ impl FormApp {
                             );
                         });
                         let mut value = params.get(*field);
-                        let width = ui.available_width();
+                        // Inside a Grid cell `available_width` is the whole grid, so
+                        // derive the column width from the panel instead.
+                        let width = (ui.available_width() - 18.0) / 2.0;
                         let response = ui.add_sized(
-                            [width, 18.0],
+                            [width.max(96.0), 18.0],
                             egui::Slider::new(&mut value, min..=max)
                                 .step_by(step as f64)
                                 .show_value(false),
