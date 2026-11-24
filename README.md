@@ -70,7 +70,12 @@ in order:
 4. `ffmpeg` on `PATH`.
 
 If none is found, clicking **Loop · 6s** opens a file picker so you can point at
-an `ffmpeg` binary once; the choice is remembered.
+an `ffmpeg` binary once; the choice is remembered. To see what Form resolves
+without opening the editor:
+
+```bash
+form --check-ffmpeg
+```
 
 Defaults: heatmap, Motion 1.50, Size 0.65, Inner glow 0.41, Outer glow 0.49,
 Contour 0.46, Direction 306°.

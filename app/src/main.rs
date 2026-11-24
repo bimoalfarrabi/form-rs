@@ -3,6 +3,19 @@
 use form_app::FormApp;
 
 fn main() -> eframe::Result<()> {
+    if std::env::args().any(|a| a == "--check-ffmpeg") {
+        match form_render::video::discover() {
+            Some(f) => {
+                println!("{} ({})", f.path.display(), f.codec);
+                return Ok(());
+            }
+            None => {
+                eprintln!("no ffmpeg with libvpx-vp9 found");
+                std::process::exit(1);
+            }
+        }
+    }
+
     let shot_path = std::env::args()
         .skip(1)
         .collect::<Vec<_>>()
