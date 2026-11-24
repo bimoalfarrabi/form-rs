@@ -15,7 +15,7 @@ use crate::color::Rgba;
 use crate::params::{self, FrameRequest, LoopSettings, Material, Params};
 use crate::{headless_device, MapTexture, Renderer};
 
-const TAU: f32 = 6.283185307179586;
+use std::f32::consts::TAU;
 
 /// Everything needed to render a loop, independent of the live editor state.
 #[derive(Clone, Debug)]
@@ -237,13 +237,13 @@ fn straight_alpha(rgba: &[u8], transparent: bool) -> Vec<u8> {
     if !transparent {
         // Opaque frames composite their own background, so only alpha matters.
         let mut out = rgba.to_vec();
-        for px in out.chunks_exact_mut(4) {
+        for px in out.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         return out;
     }
     let mut out = Vec::with_capacity(rgba.len());
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         let a = px[3];
         if a == 0 {
             out.extend_from_slice(&[0, 0, 0, 0]);

@@ -920,24 +920,30 @@ impl FormApp {
                     self.background = from_color32(c);
                     self.dirty = true;
                 }
-                let transparent = ui.add(
-                    egui::Button::new(
-                        egui::RichText::new("▧")
-                            .size(13.0)
-                            .color(if self.transparent { INK } else { MUTED }),
-                    )
-                    .fill(if self.transparent {
-                        PANEL
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    })
-                    .stroke(egui::Stroke::new(1.0, LINE))
-                    .corner_radius(egui::CornerRadius::same(7)),
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(34.0, 26.0), egui::Sense::click());
+                let fill = if self.transparent {
+                    PANEL
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                ui.painter().rect(
+                    rect,
+                    egui::CornerRadius::same(7),
+                    fill,
+                    egui::Stroke::new(1.0, LINE),
+                    egui::StrokeKind::Inside,
                 );
-                if transparent.clicked() {
+                paint_checker_icon(
+                    ui,
+                    rect.shrink(7.0),
+                    if self.transparent { INK } else { MUTED },
+                );
+                if response.clicked() {
                     self.transparent = !self.transparent;
                     self.dirty = true;
                 }
+                response.on_hover_text("Transparent background");
             });
         });
     }
@@ -953,14 +959,28 @@ impl FormApp {
             if ui.add(png).clicked() {
                 *action = Some(Action::ExportPng);
             }
-            let video =
-                egui::Button::new(egui::RichText::new("Loop · 6s ↗").size(12.0).color(MUTED))
-                    .fill(SURFACE)
-                    .stroke(egui::Stroke::new(1.0, LINE))
-                    .corner_radius(egui::CornerRadius::same(9))
-                    .min_size(egui::vec2(width, 38.0));
-            ui.add_enabled(false, video)
-                .on_disabled_hover_text("Video export lands in the next milestone (ffmpeg)");
+            let ready = self.ffmpeg.is_some() && !self.exporting;
+            let label = if self.exporting {
+                "Rendering..."
+            } else {
+                "Loop - 6s"
+            };
+            let video = egui::Button::new(egui::RichText::new(label).size(12.0).color(if ready {
+                INK
+            } else {
+                MUTED
+            }))
+            .fill(SURFACE)
+            .stroke(egui::Stroke::new(1.0, LINE))
+            .corner_radius(egui::CornerRadius::same(9))
+            .min_size(egui::vec2(width, 38.0));
+            let response = ui.add_enabled(ready, video);
+            if response.clicked() {
+                *action = Some(Action::ExportLoop);
+            }
+            if self.ffmpeg.is_none() {
+                response.on_disabled_hover_text("Needs ffmpeg with libvpx-vp9 on your PATH");
+            }
         });
     }
 
