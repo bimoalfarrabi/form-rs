@@ -1109,7 +1109,8 @@ fn paint_swatch(ui: &egui::Ui, rect: egui::Rect, colors: &[Rgba]) {
 /// box's extent along that axis.
 fn gradient_mesh(rect: egui::Rect, stops: &[egui::Color32]) -> egui::Mesh {
     const SUBDIVISIONS: usize = 10;
-    let dir = egui::vec2(0.707_106_8, 0.707_106_8);
+    let c = std::f32::consts::FRAC_1_SQRT_2;
+    let dir = egui::vec2(c, c);
     let project = |p: egui::Pos2| p.x * dir.x + p.y * dir.y;
 
     let corner_points = [
