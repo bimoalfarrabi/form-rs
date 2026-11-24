@@ -1,6 +1,7 @@
 //! The native editor: state, GPU preview and the dark panel UI.
 
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -9,6 +10,7 @@ use eframe::egui;
 use eframe::wgpu;
 use form_render::color::Rgba;
 use form_render::params::{self, Field, FrameRequest, Material, Params, Quality, Ratio};
+use form_render::video::{self, LoopJob};
 use form_render::{Frame, MapTexture, Renderer};
 
 use crate::logo::{self, Raster};
@@ -51,6 +53,14 @@ pub struct FormApp {
     /// When set, the app saves one screenshot and exits (used for docs/QA).
     pub screenshot_path: Option<PathBuf>,
     frames_drawn: u32,
+    export_rx: Option<Receiver<ExportMessage>>,
+    exporting: bool,
+    ffmpeg: Option<String>,
+}
+
+enum ExportMessage {
+    Progress(u32),
+    Done(Result<PathBuf, String>),
 }
 
 struct PreviewTexture {
@@ -99,6 +109,9 @@ impl FormApp {
             dirty: true,
             screenshot_path: None,
             frames_drawn: 0,
+            export_rx: None,
+            exporting: false,
+            ffmpeg: video::ffmpeg_status(),
         };
 
         app.load_default_logo();
@@ -139,6 +152,9 @@ impl FormApp {
             dirty: true,
             screenshot_path: None,
             frames_drawn: 0,
+            export_rx: None,
+            exporting: false,
+            ffmpeg: video::ffmpeg_status(),
         }
         .tap_default_logo()
     }
@@ -345,6 +361,103 @@ impl FormApp {
         }
     }
 
+    /// Render a six-second seamless loop on a worker thread.
+    fn export_loop(&mut self, ctx: &egui::Context) {
+        if self.exporting {
+            return;
+        }
+        let Some(codec) = self.ffmpeg.clone() else {
+            self.status =
+                "Video export needs ffmpeg with libvpx-vp9 on your PATH.".to_string();
+            return;
+        };
+        self.ensure_map();
+        let Some(map) = self.maps[self.material as usize].as_ref() else {
+            self.status = "Nothing to export yet.".to_string();
+            return;
+        };
+
+        let default_name = video::default_file_name(self.material);
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("WebM video", &["webm"])
+            .save_file()
+        else {
+            return;
+        };
+        let path = video::ensure_webm_extension(&path);
+
+        let (width, height) = self.ratio.buffer(self.quality);
+        let job = LoopJob {
+            map_rgba: map.rgba.clone(),
+            map_width: map.width,
+            map_height: map.height,
+            material: self.material,
+            params: *self.current_params(),
+            colors: self.active_colors(),
+            background: self.background,
+            transparent: self.transparent,
+            time: self.time,
+            palette_index: self.preset_index[self.material as usize],
+            width,
+            height,
+            fps: 30,
+            frames: 180,
+            path: path.clone(),
+        };
+
+        let (tx, rx): (Sender<ExportMessage>, Receiver<ExportMessage>) = std::sync::mpsc::channel();
+        let progress_tx = tx.clone();
+        let ui = ctx.clone();
+        std::thread::spawn(move || {
+            let mut report = |p: u32| {
+                let _ = progress_tx.send(ExportMessage::Progress(p));
+                ui.request_repaint();
+            };
+            let result = video::encode_loop(&job, &mut report);
+            let _ = tx.send(ExportMessage::Done(
+                result.map(|()| path).map_err(|e| e.to_string()),
+            ));
+            ui.request_repaint();
+        });
+
+        self.export_rx = Some(rx);
+        self.exporting = true;
+        self.status = format!("Rendering loop · 0% ({codec})");
+    }
+
+    /// Drain progress from the export thread.
+    fn poll_export(&mut self) {
+        let Some(rx) = &self.export_rx else {
+            return;
+        };
+        let mut finished = false;
+        while let Ok(message) = rx.try_recv() {
+            match message {
+                ExportMessage::Progress(p) => {
+                    self.status = format!("Rendering loop · {p}%");
+                }
+                ExportMessage::Done(Ok(path)) => {
+                    self.status = format!(
+                        "Saved {}",
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    );
+                    finished = true;
+                }
+                ExportMessage::Done(Err(e)) => {
+                    self.status = format!("Video export failed: {e}");
+                    finished = true;
+                }
+            }
+        }
+        if finished {
+            self.export_rx = None;
+            self.exporting = false;
+        }
+    }
+
     fn tick(&mut self) {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
@@ -392,6 +505,7 @@ impl FormApp {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.tick();
+        self.poll_export();
 
         for file in ctx.input(|i| i.raw.dropped_files.clone()) {
             let path = file.path().to_path_buf();
@@ -425,6 +539,7 @@ impl FormApp {
                 }
             }
             Some(Action::ExportPng) => self.export_png(),
+            Some(Action::ExportLoop) => self.export_loop(ctx),
             Some(Action::Material(m)) => self.set_material(m),
             Some(Action::Preset(i)) => self.apply_preset(i),
             None => {}
@@ -488,6 +603,7 @@ impl FormApp {
 enum Action {
     Load(PathBuf),
     ExportPng,
+    ExportLoop,
     Material(Material),
     Preset(usize),
 }

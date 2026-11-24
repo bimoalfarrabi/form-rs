@@ -57,7 +57,10 @@ sudo apt install libxkbcommon-dev libwayland-dev libx11-xcb-dev \
 3. Adjust the sliders, choose a **preset**, or edit the material's **colors**.
 4. Set **Quality** (2K/4K), **Background** and the aspect ratio under the
    preview.
-5. **Save PNG**.
+5. **Save PNG** for a still, **Loop · 6s** for a 180-frame seamless WebM.
+
+Loop export pipes raw frames to `ffmpeg` and needs a build with
+`libvpx-vp9`. The button stays disabled with a hint when ffmpeg is missing.
 
 Defaults: heatmap, Motion 1.50, Size 0.65, Inner glow 0.41, Outer glow 0.49,
 Contour 0.46, Direction 306°.

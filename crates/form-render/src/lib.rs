@@ -8,6 +8,7 @@ pub mod color;
 pub mod fixtures;
 pub mod params;
 pub mod preprocess;
+pub mod video;
 
 #[cfg(test)]
 mod shader_tests;
