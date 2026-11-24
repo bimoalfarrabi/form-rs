@@ -367,8 +367,7 @@ impl FormApp {
             return;
         }
         let Some(codec) = self.ffmpeg.clone() else {
-            self.status =
-                "Video export needs ffmpeg with libvpx-vp9 on your PATH.".to_string();
+            self.status = "Video export needs ffmpeg with libvpx-vp9 on your PATH.".to_string();
             return;
         };
         self.ensure_map();
@@ -673,7 +672,7 @@ impl FormApp {
                     ui.label(egui::RichText::new("®").size(10.0).color(INK));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let button = egui::Button::new(
-                            egui::RichText::new("＋  Your logo").size(13.0).color(INK),
+                            egui::RichText::new("+  Your logo").size(13.0).color(INK),
                         )
                         .fill(SURFACE)
                         .stroke(egui::Stroke::new(1.0, LINE))
@@ -946,7 +945,7 @@ impl FormApp {
     fn export_buttons(&mut self, ui: &mut egui::Ui, action: &mut Option<Action>) {
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 8.0) / 2.0;
-            let png = egui::Button::new(egui::RichText::new("Save PNG ↗").size(12.0).color(INK))
+            let png = egui::Button::new(egui::RichText::new("Save PNG").size(12.0).color(INK))
                 .fill(SURFACE)
                 .stroke(egui::Stroke::new(1.0, LINE))
                 .corner_radius(egui::CornerRadius::same(9))
@@ -1022,19 +1021,21 @@ impl FormApp {
                 );
                 ui.scope_builder(egui::UiBuilder::new().max_rect(bottom), |ui| {
                     ui.horizontal_centered(|ui| {
-                        let pause = egui::Button::new(
-                            egui::RichText::new(if self.paused { "▶" } else { "Ⅱ" })
-                                .size(13.0)
-                                .color(INK),
-                        )
-                        .fill(egui::Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::new(1.0, LINE))
-                        .corner_radius(egui::CornerRadius::same(9))
-                        .min_size(egui::vec2(38.0, 38.0));
-                        if ui.add(pause).clicked() {
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::click());
+                        ui.painter().rect(
+                            rect,
+                            egui::CornerRadius::same(9),
+                            egui::Color32::TRANSPARENT,
+                            egui::Stroke::new(1.0, LINE),
+                            egui::StrokeKind::Inside,
+                        );
+                        paint_transport(ui, rect, self.paused);
+                        if response.clicked() {
                             self.paused = !self.paused;
                             self.dirty = true;
                         }
+                        response.on_hover_text(if self.paused { "Play" } else { "Pause" });
                         ui.label(egui::RichText::new(&self.status).size(11.0).color(MUTED));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             egui::ComboBox::from_id_salt("ratio")
@@ -1108,5 +1109,59 @@ fn checker(ui: &egui::Ui, rect: egui::Rect) {
         }
         y += cell;
         row += 1;
+    }
+}
+
+/// A small checkerboard used for the transparent-background toggle.
+fn paint_checker_icon(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
+    let cell = rect.width() / 3.0;
+    let painter = ui.painter();
+    for row in 0..3 {
+        for col in 0..3 {
+            if (row + col) % 2 == 0 {
+                let min = egui::pos2(
+                    rect.left() + col as f32 * cell,
+                    rect.top() + row as f32 * cell,
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_size(min, egui::vec2(cell, cell)),
+                    egui::CornerRadius::ZERO,
+                    color,
+                );
+            }
+        }
+    }
+}
+
+/// Play triangle or pause bars, drawn rather than typed (no icon font).
+fn paint_transport(ui: &egui::Ui, rect: egui::Rect, paused: bool) {
+    let painter = ui.painter();
+    let c = INK;
+    // Paused shows a play triangle; playing shows pause bars.
+    if !paused {
+        let h = rect.height() * 0.34;
+        let w = rect.width() * 0.10;
+        let cy = rect.center().y;
+        for dx in [-0.09f32, 0.03] {
+            let x = rect.center().x + rect.width() * dx;
+            painter.rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x, cy - h / 2.0), egui::vec2(w, h)),
+                egui::CornerRadius::same(1),
+                c,
+            );
+        }
+    } else {
+        let h = rect.height() * 0.36;
+        let w = rect.width() * 0.30;
+        let center = rect.center();
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(center.x - w * 0.45, center.y - h / 2.0),
+                egui::pos2(center.x - w * 0.45, center.y + h / 2.0),
+                egui::pos2(center.x + w * 0.75, center.y),
+            ],
+            c,
+            egui::Stroke::NONE,
+        ));
     }
 }

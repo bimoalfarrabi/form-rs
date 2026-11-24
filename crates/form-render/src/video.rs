@@ -94,7 +94,11 @@ pub fn encode_loop(job: &LoopJob, progress: &mut dyn FnMut(u32)) -> Result<()> {
 
     let tmp = job.path.with_extension("webm.part");
     let bitrate = (width as u64 * height as u64 * 3).max(8_000_000);
-    let pixel_format = if job.transparent { "yuva420p" } else { "yuv420p" };
+    let pixel_format = if job.transparent {
+        "yuva420p"
+    } else {
+        "yuv420p"
+    };
 
     let mut cmd = Command::new("ffmpeg");
     cmd.args([
