@@ -1,0 +1,67 @@
+[package]
+name = "form-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Turn logos into animated liquid metal, heatmap or frosted glass — native, offline"
+readme = "../README.md"
+publish = false
+
+[[bin]]
+name = "form"
+path = "src/main.rs"
+
+[[bin]]
+name = "ui_shot"
+path = "src/bin/ui_shot.rs"
+
+[dependencies]
+form-render = { path = "../crates/form-render" }
+eframe = { version = "0.37", default-features = false, features = [
+  "wgpu",
+  "default_fonts",
+  "wayland",
+  "x11",
+] }
+egui = "0.37"
+egui-wgpu = "0.37"
+anyhow = "1"
+pollster = "0.4"
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "webp",
+] }
+resvg = "0.45"
+tiny-skia = "0.11"
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+tokio = { version = "1", features = ["rt"] }
+
+[package.metadata.packager]
+productName = "Form"
+version = "0.1.0"
+identifier = "dev.bimoalfarrabi.form"
+description = "Turn logos into animated liquid metal, heatmap or frosted glass."
+longDescription = "Form renders a logo as animated liquid metal, a heatmap or frosted glass and exports a still PNG or a seamless six-second loop. Everything runs locally."
+authors = ["Bimo Al-Farrabi"]
+licenseFile = "../LICENSE-MIT"
+homepage = "https://github.com/bimoalfarrabi/form-rs"
+category = "GraphicsAndDesign"
+outDir = "../target/dist"
+beforePackagingCommand = "cargo build --profile dist -p form-app --bin form"
+icons = ["../packaging/icons/icon.png", "../packaging/icons/icon.ico", "../packaging/icons/icon.icns"]
+
+[[package.metadata.packager.binaries]]
+path = "../dist/form"
+main = true
+
+[package.metadata.packager.deb]
+depends = ["libc6", "libxkbcommon0", "libwayland-client0", "libx11-6", "libegl1", "libvulkan1"]
+section = "graphics"
+
+[package.metadata.packager.nsis]
+installMode = "currentUser"
+languages = ["English"]

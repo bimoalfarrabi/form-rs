@@ -1,0 +1,20 @@
+[package]
+name = "form-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "wgpu renderer and CPU preprocessing for the Form logo materials"
+publish = false
+
+[dependencies]
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+naga = { version = "30", features = ["wgsl-in"] }

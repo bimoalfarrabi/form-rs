@@ -1,0 +1,29 @@
+Form (form-rs)
+Copyright 2026 Bimo Al-Farrabi
+
+This product includes software developed by third parties.
+
+--------------------------------------------------------------------------------
+Paper Shaders — https://github.com/paper-design/shaders
+Copyright 2026 Paper
+Licensed under the Apache License, Version 2.0.
+
+The WGSL fragment shaders in crates/form-render/src/wgsl/ are hand-ported from
+Paper Shaders 0.0.82 (liquidMetalFragmentShader and heatmapFragmentShader) with
+the modifications the original Form editor applies. The layout maths follow the
+Paper Shaders vertex shader. See packaging/PAPER-NOTICE.txt.
+
+--------------------------------------------------------------------------------
+Manrope — https://github.com/googlefonts/manrope
+Copyright 2018 The Manrope Project Authors
+Licensed under the SIL Open Font License, Version 1.1.
+
+app/assets/manrope.ttf is the WOFF2 shipped with the original Form editor,
+converted to TrueType. See packaging/MANROPE-OFL.txt.
+
+--------------------------------------------------------------------------------
+Form (web) — https://github.com/youraipulse/Form
+
+The frosted glass shader, presets, palettes and the material parameter ranges
+are adapted from the original browser editor. The native application in this
+repository is an independent Rust implementation.

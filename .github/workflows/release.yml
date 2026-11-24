@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    name: package (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            formats: deb,appimage
+          - name: windows-x86_64
+            os: windows-latest
+            formats: nsis,wix
+          - name: macos-arm64
+            os: macos-15
+            formats: dmg
+          - name: macos-x86_64
+            os: macos-15-intel
+            formats: dmg
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libx11-xcb-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libegl1-mesa-dev libvulkan-dev wget file
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+
+      - name: Package
+        working-directory: app
+        run: cargo packager --formats ${{ matrix.formats }}
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          case "${{ runner.os }}" in
+            Linux)
+              cp target/dist/*.deb artifacts/ 2>/dev/null || true
+              cp target/dist/*.AppImage artifacts/ 2>/dev/null || true
+              STAGE="form-${VERSION}-linux-x86_64"
+              mkdir -p "$STAGE"
+              cp target/dist/form "$STAGE/"
+              cp LICENSE-MIT LICENSE-APACHE NOTICE README.md "$STAGE/"
+              tar -czf "artifacts/${STAGE}.tar.gz" "$STAGE"
+              ;;
+            Windows)
+              cp target/dist/*.exe artifacts/ 2>/dev/null || true
+              cp target/dist/*.msi artifacts/ 2>/dev/null || true
+              STAGE="form-${VERSION}-windows-x86_64"
+              mkdir -p "$STAGE"
+              cp target/dist/form.exe "$STAGE/"
+              cp LICENSE-MIT LICENSE-APACHE NOTICE README.md "$STAGE/"
+              powershell -Command "Compress-Archive -Path '$STAGE' -DestinationPath 'artifacts/${STAGE}.zip'"
+              ;;
+            macOS)
+              cp target/dist/*.dmg artifacts/ 2>/dev/null || true
+              ;;
+          esac
+          ls -la artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -la release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false
