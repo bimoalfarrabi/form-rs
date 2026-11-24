@@ -817,7 +817,7 @@ impl FormApp {
             for (i, name) in names.iter().enumerate() {
                 let (rect, response) =
                     ui.allocate_exact_size(egui::vec2(27.0, 27.0), egui::Sense::click());
-                let colors = params::preset_colors(material, i);
+                let colors = params::swatch_colors(material, i);
                 paint_swatch(ui, rect, &colors);
                 if self.preset_index[material as usize] == i
                     && self.custom_colors[material as usize].is_none()
@@ -1085,22 +1085,130 @@ impl FormApp {
 }
 
 fn paint_swatch(ui: &egui::Ui, rect: egui::Rect, colors: &[Rgba]) {
-    let radius = egui::CornerRadius::same(8);
-    ui.painter().rect_filled(rect, radius, SURFACE);
+    let radius = 8.0;
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(radius as u8), SURFACE);
     if colors.is_empty() {
         return;
     }
-    let first = to_color32(colors[0]);
-    let last = to_color32(*colors.last().unwrap());
+    let stops: Vec<egui::Color32> = colors.iter().copied().map(to_color32).collect();
+    ui.painter()
+        .add(egui::Shape::mesh(gradient_mesh(rect, &stops)));
+    // egui can only clip to a rectangle, so restore the rounded corners.
+    for corner in corners(rect) {
+        ui.painter().add(egui::Shape::convex_polygon(
+            corner_wedge(corner, radius),
+            SURFACE,
+            egui::Stroke::NONE,
+        ));
+    }
+}
+
+/// CSS `linear-gradient(135deg, …)`: colour depends only on the projection of a
+/// point onto the down-right diagonal, with the stops spread evenly over the
+/// box's extent along that axis.
+fn gradient_mesh(rect: egui::Rect, stops: &[egui::Color32]) -> egui::Mesh {
+    const SUBDIVISIONS: usize = 10;
+    let dir = egui::vec2(0.707_106_8, 0.707_106_8);
+    let project = |p: egui::Pos2| p.x * dir.x + p.y * dir.y;
+
+    let corner_points = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.left_bottom(),
+        rect.right_bottom(),
+    ];
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for p in corner_points {
+        let v = project(p);
+        min = min.min(v);
+        max = max.max(v);
+    }
+    let span = (max - min).max(1e-3);
+
+    let sample = |p: egui::Pos2| gradient_color(stops, (project(p) - min) / span);
+
     let mut mesh = egui::Mesh::default();
-    let base = mesh.vertices.len() as u32;
-    mesh.colored_vertex(rect.left_top(), first);
-    mesh.colored_vertex(rect.right_top(), last);
-    mesh.colored_vertex(rect.right_bottom(), last);
-    mesh.colored_vertex(rect.left_bottom(), first);
-    mesh.add_triangle(base, base + 1, base + 2);
-    mesh.add_triangle(base, base + 2, base + 3);
-    ui.painter().add(egui::Shape::mesh(mesh));
+    let n = SUBDIVISIONS;
+    for iy in 0..=n {
+        for ix in 0..=n {
+            let p = egui::pos2(
+                rect.left() + rect.width() * ix as f32 / n as f32,
+                rect.top() + rect.height() * iy as f32 / n as f32,
+            );
+            mesh.colored_vertex(p, sample(p));
+        }
+    }
+    let index = |ix: usize, iy: usize| (iy * (n + 1) + ix) as u32;
+    for iy in 0..n {
+        for ix in 0..n {
+            let a = index(ix, iy);
+            let b = index(ix + 1, iy);
+            let c = index(ix + 1, iy + 1);
+            let d = index(ix, iy + 1);
+            mesh.add_triangle(a, b, c);
+            mesh.add_triangle(a, c, d);
+        }
+    }
+    mesh
+}
+
+fn gradient_color(stops: &[egui::Color32], t: f32) -> egui::Color32 {
+    if stops.len() == 1 {
+        return stops[0];
+    }
+    let scaled = t.clamp(0.0, 1.0) * (stops.len() - 1) as f32;
+    let i = (scaled.floor() as usize).min(stops.len() - 2);
+    let f = scaled - i as f32;
+    let a = stops[i];
+    let b = stops[i + 1];
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * f).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(
+        mix(a.r(), b.r()),
+        mix(a.g(), b.g()),
+        mix(a.b(), b.b()),
+        mix(a.a(), b.a()),
+    )
+}
+
+/// (corner, inward x, inward y) for each corner of a rectangle.
+fn corners(rect: egui::Rect) -> [(egui::Pos2, egui::Vec2, egui::Vec2); 4] {
+    [
+        (rect.left_top(), egui::vec2(1.0, 0.0), egui::vec2(0.0, 1.0)),
+        (
+            rect.right_top(),
+            egui::vec2(-1.0, 0.0),
+            egui::vec2(0.0, 1.0),
+        ),
+        (
+            rect.right_bottom(),
+            egui::vec2(-1.0, 0.0),
+            egui::vec2(0.0, -1.0),
+        ),
+        (
+            rect.left_bottom(),
+            egui::vec2(1.0, 0.0),
+            egui::vec2(0.0, -1.0),
+        ),
+    ]
+}
+
+/// The slice between a square corner and its rounded arc, painted in the card
+/// colour so the gradient mesh reads as a rounded swatch.
+fn corner_wedge(
+    (corner, dx, dy): (egui::Pos2, egui::Vec2, egui::Vec2),
+    radius: f32,
+) -> Vec<egui::Pos2> {
+    const ARC_STEPS: usize = 6;
+    let mut points = vec![corner, corner + dx * radius];
+    let center = corner + dx * radius + dy * radius;
+    for step in 1..ARC_STEPS {
+        let theta = std::f32::consts::FRAC_PI_2 * (1.0 - step as f32 / ARC_STEPS as f32);
+        points.push(center - (dx * theta.cos() + dy * theta.sin()) * radius);
+    }
+    points.push(corner + dy * radius);
+    points
 }
 
 fn checker(ui: &egui::Ui, rect: egui::Rect) {

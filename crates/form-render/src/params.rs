@@ -255,6 +255,17 @@ pub fn preset_colors(material: Material, index: usize) -> Vec<Rgba> {
     }
 }
 
+/// The raw CSS gradient stops used for the preset swatches, matching
+/// `swatches()` in the web app (glass uses its own three-colour sets, every
+/// other material uses the raw `palettes` array).
+pub fn swatch_colors(material: Material, index: usize) -> Vec<Rgba> {
+    let stops: &[&str] = match material {
+        Material::Glass => &GLASS_PALETTES[index.min(3)],
+        _ => &HEAT_PALETTES[index.min(3)],
+    };
+    stops.iter().map(|s| Rgba::from_hex(s).unwrap()).collect()
+}
+
 const METAL_PALETTES: [[&str; 5]; 4] = [
     ["#0a0a0a", "#3448ff", "#ee33a3", "#ffaf4a", "#ffffff"],
     ["#391a0c", "#995028", "#e6a14b", "#ffce7d", "#fff2d7"],
