@@ -32,10 +32,10 @@ jobs:
             formats: nsis,wix
           - name: macos-arm64
             os: macos-15
-            formats: dmg
+            formats: ""
           - name: macos-x86_64
             os: macos-15-intel
-            formats: dmg
+            formats: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -61,11 +61,23 @@ jobs:
           DISM /Online /Add-Capability /CapabilityName:VBSCRIPT~~~~ /NoRestart
 
       - name: Install cargo-packager
+        if: matrix.formats != ''
         run: cargo install cargo-packager --locked --version ${{ env.PACKAGER_VERSION }}
 
       - name: Package
+        if: matrix.formats != ''
         working-directory: app
         run: cargo packager --formats ${{ matrix.formats }}
+
+      - name: Build and sign the macOS bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          ARCH=$([ "${{ matrix.name }}" = "macos-arm64" ] && echo aarch64 || echo x64)
+          cargo build --profile dist -p form-app --bin form
+          ./packaging/macos-bundle.sh "$VERSION" "$ARCH" target/dist
 
       - name: Stage artifacts
         shell: bash
