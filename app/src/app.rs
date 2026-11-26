@@ -1,6 +1,6 @@
 //! The native editor: state, GPU preview and the dark panel UI.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,6 +14,7 @@ use form_render::video::{self, Ffmpeg, LoopJob};
 use form_render::{Frame, MapTexture, Renderer};
 
 use crate::logo::{self, Raster};
+use crate::project;
 use crate::settings;
 
 const BG: egui::Color32 = egui::Color32::from_rgb(0x14, 0x14, 0x14);
@@ -26,6 +27,10 @@ const PANEL: egui::Color32 = egui::Color32::from_rgb(0x28, 0x28, 0x27);
 /// Longest side of the live preview, in device pixels.
 const PREVIEW_MAX: u32 = 900;
 
+/// The web app refuses bigger logos (main.js), and the logo is embedded in a
+/// saved project, so a hard cap keeps `.form` files sane.
+const MAX_LOGO_BYTES: usize = 15 * 1024 * 1024;
+
 pub struct FormApp {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -34,6 +39,8 @@ pub struct FormApp {
 
     logo: Option<Raster>,
     filename: String,
+    /// The bytes the user opened; `None` means the bundled Form mark.
+    logo_source: Option<(String, Vec<u8>)>,
     maps: [Option<MapTexture>; 3],
 
     material: Material,
@@ -46,6 +53,8 @@ pub struct FormApp {
     ratio: Ratio,
     paused: bool,
     status: String,
+    /// Where the current `.form` project lives; `None` until first saved.
+    project_path: Option<PathBuf>,
 
     time: f32,
     last_tick: Instant,
@@ -53,6 +62,8 @@ pub struct FormApp {
     dirty: bool,
     /// When set, the app saves one screenshot and exits (used for docs/QA).
     pub screenshot_path: Option<PathBuf>,
+    /// A `.form` project to open on the first frame (CLI argument).
+    pub initial_project: Option<PathBuf>,
     frames_drawn: u32,
     export_rx: Option<Receiver<ExportMessage>>,
     exporting: bool,
@@ -89,6 +100,7 @@ impl FormApp {
             render,
             logo: None,
             filename: "Form / Original".to_string(),
+            logo_source: None,
             maps: [None, None, None],
             material: Material::Metal,
             params: [
@@ -104,11 +116,13 @@ impl FormApp {
             ratio: Ratio::Square,
             paused: false,
             status: String::new(),
+            project_path: None,
             time: 0.0,
             last_tick: Instant::now(),
             preview: None,
             dirty: true,
             screenshot_path: None,
+            initial_project: None,
             frames_drawn: 0,
             export_rx: None,
             exporting: false,
@@ -132,6 +146,7 @@ impl FormApp {
             render: Renderer::new(device),
             logo: None,
             filename: "Form / Original".to_string(),
+            logo_source: None,
             maps: [None, None, None],
             material: Material::Metal,
             params: [
@@ -147,11 +162,13 @@ impl FormApp {
             ratio: Ratio::Square,
             paused: false,
             status: String::new(),
+            project_path: None,
             time: 0.0,
             last_tick: Instant::now(),
             preview: None,
             dirty: true,
             screenshot_path: None,
+            initial_project: None,
             frames_drawn: 0,
             export_rx: None,
             exporting: false,
@@ -164,6 +181,7 @@ impl FormApp {
         match logo::default_logo() {
             Ok(raster) => {
                 self.logo = Some(raster);
+                self.logo_source = None;
                 self.filename = "Form / Original".to_string();
                 self.invalidate_maps();
             }
@@ -177,17 +195,160 @@ impl FormApp {
     }
 
     fn load_file(&mut self, bytes: &[u8], name: &str) {
+        if bytes.len() > MAX_LOGO_BYTES {
+            self.status = "Use a logo smaller than 15 MB.".to_string();
+            return;
+        }
         self.status = "Reading logo…".to_string();
         let prepared = logo::decode(bytes, name).and_then(logo::prepare);
         match prepared {
             Ok(raster) => {
                 self.logo = Some(raster);
                 self.filename = name.to_string();
+                self.logo_source = Some((name.to_string(), bytes.to_vec()));
                 self.invalidate_maps();
                 self.status.clear();
             }
             Err(e) => self.status = e.to_string(),
         }
+    }
+
+    /// Save the editor state as a `.form` project. With `save_as`, or when no
+    /// path is known yet, ask where to put it first.
+    fn save_project(&mut self, save_as: bool) {
+        let path = if save_as || self.project_path.is_none() {
+            let Some(picked) = rfd::FileDialog::new()
+                .set_file_name("untitled.form")
+                .add_filter("Form project", &[project::EXTENSION])
+                .save_file()
+            else {
+                return;
+            };
+            ensure_form_extension(picked)
+        } else {
+            self.project_path.clone().expect("checked above")
+        };
+
+        let logo = match &self.logo_source {
+            Some((name, bytes)) => project::Project::embed_logo(name, bytes),
+            None => project::LogoDto::Default,
+        };
+        let document = project::Project::new(
+            self.material,
+            self.params,
+            self.preset_index,
+            self.custom_colors.clone(),
+            self.background,
+            self.transparent,
+            self.quality,
+            self.ratio,
+            logo,
+        );
+        match document.save(&path) {
+            Ok(()) => {
+                self.project_path = Some(path.clone());
+                self.status = format!("Saved {}", display_name(&path));
+            }
+            Err(e) => self.status = format!("Could not save the project: {e}"),
+        }
+    }
+
+    /// Open a `.form` project. Everything is parsed before a single field of
+    /// live state changes, so a broken file leaves the editor as it was.
+    fn open_project(&mut self, path: &Path) {
+        let document = match project::Project::open(path) {
+            Ok(document) => document,
+            Err(e) => {
+                self.status = format!("Could not open the project: {e}");
+                return;
+            }
+        };
+
+        let Some(material) = project::material_from_slug(&document.material) else {
+            self.status = format!(
+                "Unknown material \"{}\" in this project.",
+                document.material
+            );
+            return;
+        };
+        let Some(quality) = project::quality_from_slug(&document.quality) else {
+            self.status = format!("Unknown quality \"{}\" in this project.", document.quality);
+            return;
+        };
+        let Some(ratio) = project::ratio_from_slug(&document.ratio) else {
+            self.status = format!("Unknown ratio \"{}\" in this project.", document.ratio);
+            return;
+        };
+        let Some(background) = Rgba::from_hex(&document.background) else {
+            self.status = format!(
+                "Unknown background colour {} in this project.",
+                document.background
+            );
+            return;
+        };
+        if document.params.len() != 3 || document.presets.len() != 3 || document.colors.len() != 3 {
+            self.status = "This project is missing material settings.".to_string();
+            return;
+        }
+        let params = [
+            document.params[0].to_params(),
+            document.params[1].to_params(),
+            document.params[2].to_params(),
+        ];
+        let mut colors: [Option<Vec<Rgba>>; 3] = [None, None, None];
+        for (slot, set) in colors.iter_mut().zip(&document.colors) {
+            let Some(list) = set else { continue };
+            let mut parsed = Vec::with_capacity(list.len());
+            for hex in list {
+                match Rgba::from_hex(hex) {
+                    Some(color) => parsed.push(color),
+                    None => {
+                        self.status = format!("Unknown colour {hex} in this project.");
+                        return;
+                    }
+                }
+            }
+            *slot = Some(parsed);
+        }
+        let logo_change = match document.logo_bytes() {
+            Ok(Some((name, bytes))) => match logo::decode(&bytes, &name).and_then(logo::prepare) {
+                Ok(raster) => Some((name, bytes, raster)),
+                Err(e) => {
+                    self.status = format!("Could not prepare the project logo: {e}");
+                    return;
+                }
+            },
+            Ok(None) => None,
+            Err(e) => {
+                self.status = format!("Could not open the project: {e}");
+                return;
+            }
+        };
+
+        // Parsed — apply.
+        self.material = material;
+        self.params = params;
+        self.preset_index = [
+            document.presets[0],
+            document.presets[1],
+            document.presets[2],
+        ];
+        self.custom_colors = colors;
+        self.background = background;
+        self.transparent = document.transparent;
+        self.quality = quality;
+        self.ratio = ratio;
+        match logo_change {
+            Some((name, bytes, raster)) => {
+                self.logo = Some(raster);
+                self.logo_source = Some((name.clone(), bytes));
+                self.filename = name;
+            }
+            None => self.load_default_logo(),
+        }
+        self.invalidate_maps();
+        self.project_path = Some(path.to_path_buf());
+        self.status = format!("Opened {}", display_name(path));
     }
 
     /// Ensure the active material has a map texture.
@@ -533,8 +694,31 @@ impl FormApp {
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
+        if let Some(path) = self.initial_project.take() {
+            self.open_project(&path);
+        }
         self.tick();
         self.poll_export();
+
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::O)) {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Form project", &[project::EXTENSION])
+                .pick_file()
+            {
+                self.open_project(&path);
+            }
+        }
+        if ctx.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::S,
+            )
+        }) {
+            self.save_project(true);
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+            self.save_project(false);
+        }
 
         for file in ctx.input(|i| i.raw.dropped_files.clone()) {
             let path = file.path().to_path_buf();
@@ -542,6 +726,10 @@ impl FormApp {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "dropped.png".to_string());
+            if name.to_ascii_lowercase().ends_with(".form") {
+                self.open_project(&path);
+                continue;
+            }
             match file.bytes() {
                 Ok(bytes) => self.load_file(&bytes, &name),
                 Err(_) => {
@@ -567,6 +755,8 @@ impl FormApp {
                     self.load_file(&bytes, &name);
                 }
             }
+            Some(Action::OpenProject(path)) => self.open_project(&path),
+            Some(Action::SaveProject) => self.save_project(false),
             Some(Action::ExportPng) => self.export_png(),
             Some(Action::ExportLoop) => self.export_loop(ctx),
             Some(Action::Material(m)) => self.set_material(m),
@@ -631,6 +821,8 @@ impl FormApp {
 
 enum Action {
     Load(PathBuf),
+    OpenProject(PathBuf),
+    SaveProject,
     ExportPng,
     ExportLoop,
     Material(Material),
@@ -680,6 +872,20 @@ fn from_color32(c: egui::Color32) -> Rgba {
     )
 }
 
+fn ensure_form_extension(path: PathBuf) -> PathBuf {
+    if path.extension().and_then(|e| e.to_str()) == Some(project::EXTENSION) {
+        path
+    } else {
+        path.with_extension(project::EXTENSION)
+    }
+}
+
+fn display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 impl FormApp {
     fn header(&mut self, ui: &mut egui::Ui, action: &mut Option<Action>) {
         egui::Panel::top("header")
@@ -714,6 +920,27 @@ impl FormApp {
                                 .pick_file()
                             {
                                 *action = Some(Action::Load(path));
+                            }
+                        }
+                        let text_button = |label: &str| {
+                            egui::Button::new(egui::RichText::new(label).size(11.0).color(MUTED))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(egui::CornerRadius::same(8))
+                                .min_size(egui::vec2(0.0, 38.0))
+                        };
+                        // Right-to-left layout: these land left of the logo
+                        // button, Open outermost.
+                        ui.add_space(14.0);
+                        if ui.add(text_button("Save")).clicked() {
+                            *action = Some(Action::SaveProject);
+                        }
+                        if ui.add(text_button("Open")).clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Form project", &[project::EXTENSION])
+                                .pick_file()
+                            {
+                                *action = Some(Action::OpenProject(path));
                             }
                         }
                     });

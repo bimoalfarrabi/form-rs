@@ -23,6 +23,17 @@ fn main() -> eframe::Result<()> {
         .find(|w| w[0] == "--screenshot")
         .map(|w| std::path::PathBuf::from(&w[1]));
 
+    // A positional `.form` argument opens that project on the first frame.
+    let project_path = std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with("--"))
+        .find(|arg| {
+            std::path::Path::new(arg)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("form"))
+        })
+        .map(std::path::PathBuf::from);
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 900.0])
@@ -38,6 +49,7 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             let mut app = FormApp::new(cc)?;
             app.screenshot_path = shot_path;
+            app.initial_project = project_path;
             Ok(Box::new(app))
         }),
     )

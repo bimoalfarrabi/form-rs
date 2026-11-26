@@ -39,6 +39,9 @@ resvg = "0.45"
 tiny-skia = "0.11"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 tokio = { version = "1", features = ["rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
 
 [package.metadata.packager]
 productName = "Form"
@@ -53,6 +56,13 @@ binariesDir = "../target/dist"
 resources = ["../LICENSE-MIT", "../LICENSE-APACHE", "../NOTICE"]
 beforePackagingCommand = "cargo build --profile dist -p form-app --bin form"
 icons = ["../packaging/icons/icon.png", "../packaging/icons/icon.ico", "../packaging/icons/icon.icns"]
+
+[[package.metadata.packager.fileAssociations]]
+extensions = ["form"]
+name = "Form project"
+description = "Form logo-animation project"
+mimeType = "application/x-form-project"
+role = "editor"
 
 [[package.metadata.packager.binaries]]
 path = "form"

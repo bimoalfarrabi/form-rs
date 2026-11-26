@@ -77,6 +77,14 @@ without opening the editor:
 form --check-ffmpeg
 ```
 
+### Projects
+
+**Open** and **Save** (or Ctrl/Cmd+O, Ctrl/Cmd+S and Ctrl/Cmd+Shift+S) store
+the whole session as a `.form` JSON file: the material, sliders, presets,
+colors, background, quality, aspect ratio and the original logo bytes are
+embedded, so a project reopens exactly as you left it. Once the app is
+installed, double-clicking a `.form` file opens it.
+
 Defaults: heatmap, Motion 1.50, Size 0.65, Inner glow 0.41, Outer glow 0.49,
 Contour 0.46, Direction 306°.
 

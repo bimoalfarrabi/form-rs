@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod logo;
+pub mod project;
 pub mod settings;
 
 pub use app::{install_fonts, FormApp};
