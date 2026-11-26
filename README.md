@@ -55,9 +55,15 @@ sudo apt install libxkbcommon-dev libwayland-dev libx11-xcb-dev \
    transparent background.
 2. Pick a material: **Liquid metal**, **Heatmap**, **Frosted glass**.
 3. Adjust the sliders, choose a **preset**, or edit the material's **colors**.
-4. Set **Quality** (2K/4K), **Background** and the aspect ratio under the
-   preview.
+4. Set **Quality** (2K, 4K, or a custom width × height) and **Background**;
+   for 2K/4K, pick the aspect ratio under the preview.
 5. **Save PNG** for a still, **Loop · 6s** for a 180-frame seamless WebM.
+
+Pick **Custom** under Quality for an exact pixel size: 1200×630 for an Open
+Graph card, 512×512 for an icon, or anything up to 8192 px. The preview adopts
+the custom aspect; WebM loops round odd sides down to the nearest even pixel.
+Below 500 px the liquid-metal shader uses the small-canvas path, matching the
+web app, so a tiny still can differ slightly from the editor preview.
 
 Loop export pipes raw frames to `ffmpeg` with `libvpx-vp9`. Form looks for it,
 in order:
@@ -81,8 +87,8 @@ form --check-ffmpeg
 
 **Open** and **Save** (or Ctrl/Cmd+O, Ctrl/Cmd+S and Ctrl/Cmd+Shift+S) store
 the whole session as a `.form` JSON file: the material, sliders, presets,
-colors, background, quality, aspect ratio and the original logo bytes are
-embedded, so a project reopens exactly as you left it. Once the app is
+colors, background, quality, custom size, aspect ratio and the original logo
+bytes are embedded, so a project reopens exactly as you left it. Once the app is
 installed, double-clicking a `.form` file opens it.
 
 Defaults: heatmap, Motion 1.50, Size 0.65, Inner glow 0.41, Outer glow 0.49,

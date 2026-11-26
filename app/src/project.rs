@@ -26,7 +26,15 @@ pub struct Project {
     pub transparent: bool,
     pub quality: String,
     pub ratio: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<SizeDto>,
     pub logo: LogoDto,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SizeDto {
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -158,6 +166,7 @@ impl Project {
         transparent: bool,
         quality: Quality,
         ratio: Ratio,
+        size: Option<(u32, u32)>,
         logo: LogoDto,
     ) -> Self {
         Self {
@@ -176,6 +185,7 @@ impl Project {
             transparent,
             quality: quality_slug(quality).to_string(),
             ratio: ratio_slug(ratio).to_string(),
+            size: size.map(|(width, height)| SizeDto { width, height }),
             logo,
         }
     }
@@ -199,6 +209,11 @@ impl Project {
         }
         if project.params.len() != 3 || project.presets.len() != 3 || project.colors.len() != 3 {
             bail!("the project is missing per-material settings");
+        }
+        if let Some(size) = &project.size {
+            if size.width == 0 || size.height == 0 {
+                bail!("the project has an invalid custom size (sides must be at least 1)");
+            }
         }
         Ok(project)
     }
@@ -242,6 +257,7 @@ mod tests {
             true,
             Quality::K4,
             Ratio::Portrait,
+            Some((1200, 630)),
             Project::embed_logo("logo.svg", b"<svg/>"),
         )
     }
@@ -291,5 +307,52 @@ mod tests {
         let params = dto[0].to_params();
         assert!((params.repetition - 4.35).abs() < 1e-6);
         assert_eq!(params.angle, 315.0);
+    }
+
+    #[test]
+    fn round_trips_the_custom_size() {
+        let project = sample();
+        assert_eq!(
+            project.size,
+            Some(SizeDto {
+                width: 1200,
+                height: 630
+            })
+        );
+        let text = serde_json::to_string(&project).unwrap();
+        let back: Project = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            back.size,
+            Some(SizeDto {
+                width: 1200,
+                height: 630
+            })
+        );
+    }
+
+    #[test]
+    fn opens_files_without_a_size() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&sample()).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("size");
+        let dir = std::env::temp_dir().join("form-project-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("no-size.form");
+        std::fs::write(&path, value.to_string()).unwrap();
+        let project = Project::open(&path).unwrap();
+        assert_eq!(project.size, None);
+    }
+
+    #[test]
+    fn rejects_zero_sized_projects() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&sample()).unwrap()).unwrap();
+        value["size"] = serde_json::json!({"width": 0, "height": 630});
+        let dir = std::env::temp_dir().join("form-project-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("zero-size.form");
+        std::fs::write(&path, value.to_string()).unwrap();
+        let err = Project::open(&path).unwrap_err().to_string();
+        assert!(err.contains("custom size"), "{err}");
     }
 }

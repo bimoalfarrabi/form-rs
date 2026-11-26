@@ -1,12 +1,13 @@
 //! Headless UI screenshot: renders one frame of the editor to a PNG.
 //!
 //! ```text
-//! cargo run -p form-app --bin ui_shot -- /tmp/opencode/ui.png [width] [height]
+//! cargo run -p form-app --bin ui_shot -- /tmp/opencode/ui.png [width] [height] [project.form]
 //! ```
 
 use eframe::egui;
 use eframe::wgpu;
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
+use std::path::PathBuf;
 
 use form_app::{install_fonts, FormApp};
 
@@ -20,10 +21,13 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "/tmp/opencode/ui.png".to_string());
     let width: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1440);
     let height: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(900);
+    // Optional fourth argument: a `.form` project to open before the first pass.
+    let initial_project = args.get(3).map(PathBuf::from);
 
     let (device, queue) = pollster::block_on(form_render::headless_device())?;
     let renderer = Renderer::new(&device, FORMAT, RendererOptions::default());
     let mut app = FormApp::new_headless(&device, &queue, renderer);
+    app.initial_project = initial_project;
 
     let ctx = egui::Context::default();
     install_fonts(&ctx);

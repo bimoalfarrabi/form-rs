@@ -17,6 +17,11 @@ use crate::{headless_device, MapTexture, Renderer};
 
 use std::f32::consts::TAU;
 
+/// Round an export size down to even sides: VP9 yuv420 needs even sides.
+pub fn even_size(width: u32, height: u32) -> (u32, u32) {
+    (width & !1, height & !1)
+}
+
 /// Everything needed to render a loop, independent of the live editor state.
 #[derive(Clone, Debug)]
 pub struct LoopJob {
@@ -136,8 +141,7 @@ pub fn encode_loop(job: &LoopJob, ffmpeg: &Ffmpeg, progress: &mut dyn FnMut(u32)
     let codec = ffmpeg.codec.clone();
 
     // yuv420 needs even dimensions.
-    let width = job.width & !1;
-    let height = job.height & !1;
+    let (width, height) = even_size(job.width, job.height);
     if width == 0 || height == 0 {
         bail!("output size is too small to encode");
     }
@@ -358,5 +362,14 @@ mod tests {
         let dir = std::env::temp_dir().join("form-probe-test");
         let good = fake_ffmpeg(&dir, "ffmpeg-vp9-name", true);
         assert_eq!(Ffmpeg::probe(&good).unwrap().codec, "libvpx-vp9");
+    }
+
+    #[test]
+    fn even_size_keeps_even_sides_and_rounds_odd_down() {
+        assert_eq!(even_size(2048, 1152), (2048, 1152));
+        assert_eq!(even_size(1200, 630), (1200, 630));
+        assert_eq!(even_size(1201, 631), (1200, 630));
+        assert_eq!(even_size(3, 5), (2, 4));
+        assert_eq!(even_size(1, 1), (0, 0));
     }
 }

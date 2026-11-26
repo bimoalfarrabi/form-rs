@@ -51,6 +51,8 @@ pub struct FormApp {
     transparent: bool,
     quality: Quality,
     ratio: Ratio,
+    /// Exact pixel export size; `None` uses `ratio.buffer(quality)`.
+    custom_size: Option<(u32, u32)>,
     paused: bool,
     status: String,
     /// Where the current `.form` project lives; `None` until first saved.
@@ -114,6 +116,7 @@ impl FormApp {
             transparent: false,
             quality: Quality::K2,
             ratio: Ratio::Square,
+            custom_size: None,
             paused: false,
             status: String::new(),
             project_path: None,
@@ -160,6 +163,7 @@ impl FormApp {
             transparent: false,
             quality: Quality::K2,
             ratio: Ratio::Square,
+            custom_size: None,
             paused: false,
             status: String::new(),
             project_path: None,
@@ -242,6 +246,7 @@ impl FormApp {
             self.transparent,
             self.quality,
             self.ratio,
+            self.custom_size,
             logo,
         );
         match document.save(&path) {
@@ -324,6 +329,10 @@ impl FormApp {
                 return;
             }
         };
+        let custom_size = document
+            .size
+            .map(|s| (s.width, s.height))
+            .map(|size| clamp_size(size, self.max_output_dimension()));
 
         // Parsed — apply.
         self.material = material;
@@ -349,6 +358,15 @@ impl FormApp {
         self.invalidate_maps();
         self.project_path = Some(path.to_path_buf());
         self.status = format!("Opened {}", display_name(path));
+        if let (Some(requested), Some(clamped)) =
+            (document.size.map(|s| (s.width, s.height)), custom_size)
+        {
+            if clamped != requested {
+                self.status
+                    .push_str(&format!(" · size limited to {}×{}", clamped.0, clamped.1));
+            }
+        }
+        self.custom_size = custom_size;
     }
 
     /// Ensure the active material has a map texture.
@@ -492,7 +510,7 @@ impl FormApp {
             self.status = "Nothing to export yet.".to_string();
             return;
         };
-        let (w, h) = self.ratio.buffer(self.quality);
+        let (w, h) = self.output_size();
         let request = FrameRequest {
             material: self.material,
             params: *self.current_params(),
@@ -551,7 +569,10 @@ impl FormApp {
         };
         let path = video::ensure_webm_extension(&path);
 
-        let (width, height) = self.ratio.buffer(self.quality);
+        let (width, height) = {
+            let (w, h) = self.output_size();
+            video::even_size(w, h)
+        };
         let job = LoopJob {
             map_rgba: map.rgba.clone(),
             map_width: map.width,
@@ -664,7 +685,7 @@ impl FormApp {
 
     /// Preview pixel size for the workspace rectangle.
     fn preview_size(&self, rect: egui::Rect, ppp: f32) -> (u32, u32) {
-        let ratio = self.ratio.value();
+        let ratio = self.output_aspect();
         let avail_w = (rect.width() - 32.0).max(64.0);
         let avail_h = (rect.height() - 96.0).max(64.0);
         let mut w = avail_w.min(avail_h * ratio);
@@ -679,6 +700,31 @@ impl FormApp {
             (w * ppp).round().max(1.0) as u32,
             (h * ppp).round().max(1.0) as u32,
         )
+    }
+
+    /// Export cap: the GPU texture limit, at most 8192, never below 16.
+    fn max_output_dimension(&self) -> u32 {
+        self.device
+            .limits()
+            .max_texture_dimension_2d
+            .clamp(16, 8192)
+    }
+
+    /// The pixel size exports render at: the custom size when set, clamped,
+    /// otherwise the ratio's buffered size for the quality tier.
+    fn output_size(&self) -> (u32, u32) {
+        resolve_output_size(
+            self.custom_size,
+            self.quality,
+            self.ratio,
+            self.max_output_dimension(),
+        )
+    }
+
+    /// Width over height, for fitting the preview rectangle.
+    fn output_aspect(&self) -> f32 {
+        let (w, h) = self.output_size();
+        w as f32 / h.max(1) as f32
     }
 }
 
@@ -1157,14 +1203,48 @@ impl FormApp {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Quality").size(11.0).color(INK));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                egui::ComboBox::from_id_salt("quality")
-                    .selected_text(match self.quality {
+                let selected = match self.custom_size {
+                    Some(_) => "Custom".to_string(),
+                    None => match self.quality {
                         Quality::K2 => "2K",
                         Quality::K4 => "4K",
-                    })
+                    }
+                    .to_string(),
+                };
+                egui::ComboBox::from_id_salt("quality")
+                    .width(78.0)
+                    .selected_text(selected)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.quality, Quality::K2, "2K");
-                        ui.selectable_value(&mut self.quality, Quality::K4, "4K");
+                        let mut picked: Option<(Quality, Option<(u32, u32)>)> = None;
+                        let picking_custom = self.custom_size.is_none();
+                        if ui
+                            .selectable_label(
+                                self.custom_size.is_none() && self.quality == Quality::K2,
+                                "2K",
+                            )
+                            .clicked()
+                        {
+                            picked = Some((Quality::K2, None));
+                        }
+                        if ui
+                            .selectable_label(
+                                self.custom_size.is_none() && self.quality == Quality::K4,
+                                "4K",
+                            )
+                            .clicked()
+                        {
+                            picked = Some((Quality::K4, None));
+                        }
+                        if ui.selectable_label(!picking_custom, "Custom").clicked() {
+                            picked = Some((self.quality, Some(self.output_size())));
+                        }
+                        if let Some((quality, size)) = picked {
+                            if quality != self.quality || size != self.custom_size {
+                                self.quality = quality;
+                                self.custom_size = size;
+                                self.dirty = true;
+                            }
+                        }
                     });
             });
         });
@@ -1236,18 +1316,27 @@ impl FormApp {
             if response.clicked() {
                 *action = Some(Action::ExportLoop);
             }
+            let (w, h) = self.output_size();
+            let (ew, eh) = video::even_size(w, h);
+            let size_note = if (ew, eh) == (w, h) {
+                format!(" at {w}×{h}")
+            } else {
+                format!(" at {ew}×{eh} (even sides)")
+            };
             match &self.ffmpeg {
                 Some(ffmpeg) => {
                     response.on_hover_text(format!(
-                        "180 frames at 30 fps via {} ({})",
+                        "180 frames at 30 fps via {} ({}){}",
                         ffmpeg.path.display(),
-                        ffmpeg.codec
+                        ffmpeg.codec,
+                        size_note
                     ));
                 }
                 None => {
-                    response.on_hover_text(
-                        "ffmpeg not found - clicking lets you locate it (it is remembered)",
-                    );
+                    response.on_hover_text(format!(
+                        "ffmpeg not found - clicking lets you locate it (it is remembered){}",
+                        size_note
+                    ));
                 }
             }
         });
@@ -1273,7 +1362,7 @@ impl FormApp {
                     egui::StrokeKind::Inside,
                 );
 
-                let ratio = self.ratio.value();
+                let ratio = self.output_aspect();
                 let w = (card.width() - 32.0).min((card.height() - 96.0) * ratio);
                 let h = w / ratio;
                 let rect = egui::Rect::from_center_size(card.center(), egui::vec2(w, h));
@@ -1325,23 +1414,92 @@ impl FormApp {
                             self.dirty = true;
                         }
                         response.on_hover_text(if self.paused { "Play" } else { "Pause" });
-                        ui.label(egui::RichText::new(&self.status).size(11.0).color(MUTED));
+                        // Leave room for the size fields (custom) or the ratio
+                        // combo (default) so a long status cannot push them out.
+                        let reserve = if self.custom_size.is_some() {
+                            300.0
+                        } else {
+                            90.0
+                        };
+                        let width = (ui.available_width() - reserve).max(0.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(width, 18.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&self.status).size(11.0).color(MUTED),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(&self.status);
+                            },
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            egui::ComboBox::from_id_salt("ratio")
-                                .selected_text(self.ratio.label())
-                                .width(66.0)
-                                .show_ui(ui, |ui| {
-                                    for ratio in [Ratio::Square, Ratio::Landscape, Ratio::Portrait]
+                            if self.custom_size.is_some() {
+                                let max = self.max_output_dimension();
+                                let (mut w, mut h) = self.custom_size.expect("checked above");
+                                let mut changed = false;
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                if ui
+                                    .add(egui::DragValue::new(&mut h).range(16..=max).speed(1.0))
+                                    .on_hover_text("Export height")
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                                ui.label(egui::RichText::new("×").size(10.0).color(MUTED));
+                                if ui
+                                    .add(egui::DragValue::new(&mut w).range(16..=max).speed(1.0))
+                                    .on_hover_text("Export width")
+                                    .changed()
+                                {
+                                    changed = true;
+                                }
+                                let mut quick = |label: &str, hover: &str, size: (u32, u32)| {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(label).size(11.0).color(MUTED),
+                                            )
+                                            .fill(egui::Color32::TRANSPARENT)
+                                            .stroke(egui::Stroke::NONE)
+                                            .corner_radius(egui::CornerRadius::same(7)),
+                                        )
+                                        .on_hover_text(hover)
+                                        .clicked()
                                     {
-                                        if ui
-                                            .selectable_label(self.ratio == ratio, ratio.label())
-                                            .clicked()
-                                        {
-                                            self.ratio = ratio;
-                                            self.dirty = true;
-                                        }
+                                        self.custom_size = Some(size);
+                                        self.dirty = true;
                                     }
-                                });
+                                };
+                                quick("512×512", "Square icon", (512, 512));
+                                quick("1200×630", "Open Graph card", (1200, 630));
+                                if changed {
+                                    self.custom_size = Some((w, h));
+                                    self.dirty = true;
+                                }
+                            } else {
+                                egui::ComboBox::from_id_salt("ratio")
+                                    .selected_text(self.ratio.label())
+                                    .width(66.0)
+                                    .show_ui(ui, |ui| {
+                                        for ratio in
+                                            [Ratio::Square, Ratio::Landscape, Ratio::Portrait]
+                                        {
+                                            if ui
+                                                .selectable_label(
+                                                    self.ratio == ratio,
+                                                    ratio.label(),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.ratio = ratio;
+                                                self.dirty = true;
+                                            }
+                                        }
+                                    });
+                            }
                         });
                     });
                 });
@@ -1569,4 +1727,53 @@ fn resolve_ffmpeg() -> Option<Ffmpeg> {
     settings::ffmpeg_path()
         .and_then(|p| Ffmpeg::probe(&p))
         .or_else(video::discover)
+}
+
+/// Clamp an export size into the supported range: each side at least 16 and at
+/// most `max` (the GPU limit, capped at 8192). A `max` below 16 still yields 16.
+fn clamp_size(size: (u32, u32), max: u32) -> (u32, u32) {
+    let max = max.max(16);
+    (size.0.clamp(16, max), size.1.clamp(16, max))
+}
+
+/// Pick the custom size when the editor has one, otherwise the quality tier.
+fn resolve_output_size(
+    custom: Option<(u32, u32)>,
+    quality: Quality,
+    ratio: Ratio,
+    max: u32,
+) -> (u32, u32) {
+    match custom {
+        Some(size) => clamp_size(size, max),
+        None => ratio.buffer(quality),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_size_keeps_sane_sizes_and_repairs_extremes() {
+        assert_eq!(clamp_size((1200, 630), 8192), (1200, 630));
+        assert_eq!(clamp_size((0, 1), 8192), (16, 16));
+        assert_eq!(clamp_size((9000, 630), 8192), (8192, 630));
+        assert_eq!(clamp_size((9000, 1), 10), (16, 16));
+    }
+
+    #[test]
+    fn output_size_prefers_custom_and_falls_back_to_the_ratio() {
+        assert_eq!(
+            resolve_output_size(Some((1200, 630)), Quality::K4, Ratio::Portrait, 8192),
+            (1200, 630)
+        );
+        assert_eq!(
+            resolve_output_size(None, Quality::K2, Ratio::Landscape, 8192),
+            (2048, 1152)
+        );
+        assert_eq!(
+            resolve_output_size(Some((1, 9000)), Quality::K2, Ratio::Square, 4096),
+            (16, 4096)
+        );
+    }
 }
